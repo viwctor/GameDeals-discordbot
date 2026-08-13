@@ -1,8 +1,7 @@
-name: Post Game Deals (every 5 days)
+name: Post Quality Steam Deals
 
 on:
   schedule:
-    # Run at 14:00 UTC every 5th day of the month
     - cron: "17 */3 * * *"
   workflow_dispatch:
 
@@ -39,21 +38,33 @@ jobs:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
           ITAD_API_KEY: ${{ secrets.ITAD_API_KEY }}
+
           DEAL_LIMIT: ${{ vars.DEAL_LIMIT || '10' }}
-          MIN_SAVINGS: ${{ vars.MIN_SAVINGS || '80' }}
+
+          MIN_SAVINGS: ${{ vars.MIN_SAVINGS || '50' }}
           MAX_SAVINGS: ${{ vars.MAX_SAVINGS || '100' }}
+
           MIN_REVIEW_COUNT: ${{ vars.MIN_REVIEW_COUNT || '5000' }}
           MIN_RATING: ${{ vars.MIN_RATING || '75' }}
+
+          POPULARITY_POOL: ${{ vars.POPULARITY_POOL || '2000' }}
+          QUALITY_CANDIDATES: ${{ vars.QUALITY_CANDIDATES || '80' }}
+          MAX_DEAL_PAGES: ${{ vars.MAX_DEAL_PAGES || '50' }}
+
           MIN_HOURS_UNTIL_EXPIRY: ${{ vars.MIN_HOURS_UNTIL_EXPIRY || '0' }}
+
           COUNTRY: ${{ vars.COUNTRY || 'BR' }}
           SHOP_IDS: ${{ vars.SHOP_IDS || '61' }}
+
           DEDUPLICATION_DAYS: ${{ vars.DEDUPLICATION_DAYS || '3' }}
+
         run: yarn start
 
       - name: Commit deal history
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
+
           git add deal-history.json
 
           if ! git diff --cached --quiet; then
