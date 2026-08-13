@@ -145,21 +145,11 @@ async function postDeals() {
     }
 
     if (newDeals.length === 0) {
-      console.log("\n No new deals found matching criteria");
-
+      console.log("\nNo new deals found matching criteria");
       deduplicationService.markDealsAsPosted([]);
-
-      if (!TEST_MODE) {
-        const channel = (await client.channels.fetch(
-          CHANNEL_ID,
-        )) as TextChannel;
-        await channel.send(
-          "No new game deals found today matching your filters.",
-        );
-      }
       return;
     }
-
+    
     console.log(`\n📊 Deal Stats:`);
     const stats = deduplicationService.getStats();
     console.log(`   - Total tracked deals: ${stats.totalDeals}`);
