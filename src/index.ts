@@ -1,19 +1,29 @@
-import { Client, GatewayIntentBits, TextChannel } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  TextChannel,
+} from "discord.js";
+
 import dotenv from "dotenv";
-import { DealCollector } from "./services/dealCollector";
+
 import {
   createDealMatcher,
   parseDrmNamesFromEnv,
 } from "./services/dealFilters";
+
 import { ITADApi } from "./services/ITADApi";
+
 import { DeduplicationService } from "./services/deduplication";
-import { ITADConfig } from "./types";
+
+import {
+  ITADConfig,
+  ITADDeal,
+  ITADGameInfo,
+  ITADReview,
+} from "./types";
 
 dotenv.config();
 
-/**
- * Required environment variables
- */
 if (
   !process.env.DISCORD_TOKEN ||
   !process.env.DISCORD_CHANNEL_ID ||
@@ -22,414 +32,948 @@ if (
   console.error(
     "Missing required environment variables: DISCORD_TOKEN, DISCORD_CHANNEL_ID, or ITAD_API_KEY",
   );
+
   process.exit(1);
 }
 
-const DISCORD_TOKEN: string = process.env.DISCORD_TOKEN;
-const CHANNEL_ID: string = process.env.DISCORD_CHANNEL_ID;
-const ITAD_API_KEY: string = process.env.ITAD_API_KEY;
+const DISCORD_TOKEN =
+  process.env.DISCORD_TOKEN;
+
+const CHANNEL_ID =
+  process.env.DISCORD_CHANNEL_ID;
+
+const ITAD_API_KEY =
+  process.env.ITAD_API_KEY;
 
 /**
- * Deal configuration
+ * Number of deals eventually posted.
  */
-const DEAL_LIMIT = parseInt(process.env.DEAL_LIMIT || "10", 10);
-
-const MIN_SAVINGS = parseInt(
-  process.env.MIN_SAVINGS || "80",
-  10,
-);
-
-const MAX_SAVINGS = parseInt(
-  process.env.MAX_SAVINGS || "100",
-  10,
-);
-
-const MIN_REVIEW_COUNT = parseInt(
-  process.env.MIN_REVIEW_COUNT || "5000",
-  10,
-);
-
-const MIN_RATING = parseInt(
-  process.env.MIN_RATING || "75",
-  10,
-);
-
-const MIN_HOURS_UNTIL_EXPIRY = parseInt(
-  process.env.MIN_HOURS_UNTIL_EXPIRY || "0",
-  10,
-);
-
-const COUNTRY = process.env.COUNTRY || "BR";
-
-const DEDUPLICATION_DAYS = parseInt(
-  process.env.DEDUPLICATION_DAYS || "3",
-  10,
-);
-
-const TEST_MODE = process.env.TEST_MODE === "true";
+const DEAL_LIMIT =
+  parseInt(
+    process.env.DEAL_LIMIT ||
+      "10",
+    10,
+  );
 
 /**
- * Shop IDs
+ * Discount is intentionally less strict now.
  *
+ * Quality and popularity have much more weight.
+ */
+const MIN_SAVINGS =
+  parseInt(
+    process.env.MIN_SAVINGS ||
+      "50",
+    10,
+  );
+
+const MAX_SAVINGS =
+  parseInt(
+    process.env.MAX_SAVINGS ||
+      "100",
+    10,
+  );
+
+/**
+ * Actual Steam quality filters.
+ *
+ * These are checked using /games/info/v2,
+ * NOT /deals/v2.
+ */
+const MIN_REVIEW_COUNT =
+  parseInt(
+    process.env
+      .MIN_REVIEW_COUNT ||
+      "5000",
+    10,
+  );
+
+const MIN_RATING =
+  parseInt(
+    process.env.MIN_RATING ||
+      "75",
+    10,
+  );
+
+const MIN_HOURS_UNTIL_EXPIRY =
+  parseInt(
+    process.env
+      .MIN_HOURS_UNTIL_EXPIRY ||
+      "0",
+    10,
+  );
+
+/**
+ * Search within the N most popular ITAD games.
+ *
+ * Higher number = more inclusive.
+ */
+const POPULARITY_POOL =
+  parseInt(
+    process.env
+      .POPULARITY_POOL ||
+      "2000",
+    10,
+  );
+
+/**
+ * After intersecting sales with popularity,
+ * only load expensive Game Info data for
+ * the most promising candidates.
+ */
+const QUALITY_CANDIDATES =
+  parseInt(
+    process.env
+      .QUALITY_CANDIDATES ||
+      "80",
+    10,
+  );
+
+/**
+ * Maximum number of /deals pages to scan.
+ *
+ * Each page contains 200 offers.
+ */
+const MAX_DEAL_PAGES =
+  parseInt(
+    process.env
+      .MAX_DEAL_PAGES ||
+      "50",
+    10,
+  );
+
+const COUNTRY =
+  process.env.COUNTRY ||
+  "BR";
+
+const DEDUPLICATION_DAYS =
+  parseInt(
+    process.env
+      .DEDUPLICATION_DAYS ||
+      "3",
+    10,
+  );
+
+const TEST_MODE =
+  process.env.TEST_MODE ===
+  "true";
+
+/**
  * Steam = 61
  */
-const SHOP_IDS = process.env.SHOP_IDS
-  ? process.env.SHOP_IDS
-      .split(",")
-      .map((id) => parseInt(id.trim(), 10))
-      .filter((id) => !Number.isNaN(id))
-  : [61];
+const SHOP_IDS =
+  process.env.SHOP_IDS
+    ? process.env.SHOP_IDS
+        .split(",")
+        .map((id) =>
+          parseInt(
+            id.trim(),
+            10,
+          ),
+        )
+        .filter(
+          (id) =>
+            !Number.isNaN(
+              id,
+            ),
+        )
+    : [61];
+
+const REQUIRED_DRM_NAMES =
+  parseDrmNamesFromEnv(
+    process.env
+      .REQUIRED_DRM_NAMES,
+  );
+
+const client =
+  new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+    ],
+  });
+
+const deduplicationService =
+  new DeduplicationService(
+    "./deal-history.json",
+    DEDUPLICATION_DAYS,
+  );
+
+interface RankedCandidate {
+  deal: ITADDeal;
+  info: ITADGameInfo;
+  steamReview: ITADReview;
+  popularityPosition: number;
+  qualityScore: number;
+}
 
 /**
- * DRM filtering
+ * Find Steam review object.
+ */
+function getSteamReview(
+  info: ITADGameInfo,
+): ITADReview | undefined {
+  return info.reviews?.find(
+    (review) =>
+      review.source.toLowerCase() ===
+      "steam",
+  );
+}
+
+/**
+ * QUALITY SCORE — 100 possible points.
  *
- * Leaving REQUIRED_DRM_NAMES undefined means no DRM filtering.
- * This is intentional because SHOP_IDS=61 already limits results
- * to the Steam store.
+ * 50% = Steam rating
+ * 25% = ITAD popularity
+ * 20% = review count
+ *  5% = discount
+ *
+ * Discount deliberately has very little weight.
  */
-const REQUIRED_DRM_NAMES = parseDrmNamesFromEnv(
-  process.env.REQUIRED_DRM_NAMES,
-);
+function calculateQualityScore(
+  deal: ITADDeal,
+  steamReview: ITADReview,
+  popularityPosition: number,
+): number {
+  /**
+   * 0-50 points
+   */
+  const ratingScore =
+    Math.min(
+      steamReview.score,
+      100,
+    ) /
+    100 *
+    50;
 
-/**
- * Discord client
- */
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-  ],
-});
+  /**
+   * 0-20 points
+   *
+   * Logarithmic because the difference between
+   * 1,000 and 10,000 reviews matters much more
+   * than the difference between 900,000 and
+   * 910,000.
+   *
+   * 1,000,000 reviews ~= maximum.
+   */
+  const reviewScore =
+    Math.min(
+      Math.log10(
+        steamReview.count + 1,
+      ) / 6,
+      1,
+    ) * 20;
 
-/**
- * Deal deduplication
- */
-const deduplicationService = new DeduplicationService(
-  "./deal-history.json",
-  DEDUPLICATION_DAYS,
-);
+  /**
+   * 0-25 points
+   *
+   * #1 ITAD gets nearly 25 points.
+   * Last game in pool approaches 0.
+   */
+  const popularityRatio =
+    POPULARITY_POOL <= 1
+      ? 1
+      : Math.max(
+          0,
+          1 -
+            (popularityPosition -
+              1) /
+              (POPULARITY_POOL -
+                1),
+        );
 
-/**
- * Main deal collection/posting function
- */
+  const popularityScore =
+    popularityRatio * 25;
+
+  /**
+   * Only 5 points depend on discount.
+   *
+   * This prevents 95%-off shovelware
+   * beating a great 60%-off game.
+   */
+  const discountScore =
+    Math.min(
+      deal.deal.cut,
+      100,
+    ) /
+    100 *
+    5;
+
+  return (
+    ratingScore +
+    reviewScore +
+    popularityScore +
+    discountScore
+  );
+}
+
 async function postDeals() {
   try {
-    console.log("=".repeat(60));
-    console.log("ITAD Game Deals Bot - Starting...");
-    console.log("=".repeat(60));
-
     console.log(
-      `Mode: ${TEST_MODE ? "TEST (Console Only)" : "LIVE (Discord)"}`,
+      "=".repeat(60),
     );
 
-    console.log(`Deal limit: ${DEAL_LIMIT}`);
-    console.log(`Min savings: ${MIN_SAVINGS}%`);
-    console.log(`Country: ${COUNTRY}`);
-    console.log(`Shops: ${SHOP_IDS.join(", ")}`);
-
-    console.log("=".repeat(60));
-
-    /**
-     * ITAD API
-     */
-    const api = new ITADApi(ITAD_API_KEY);
-
-    /**
-     * ITAD query configuration
-     */
-    const pageSize = 200;
-
-    const baseConfig: ITADConfig = {
-  country: COUNTRY,
-
-  // Highest discounts first
-  sort: "-cut",
-
-  shops: SHOP_IDS,
-
-  minSavings: MIN_SAVINGS,
-  maxSavings: MAX_SAVINGS,
-
-  minReviewCount: MIN_REVIEW_COUNT,
-  minRating: MIN_RATING,
-
-  limit: pageSize,
-};
-
-    /**
-     * Print effective configuration
-     */
-    console.log("\n🔧 Configuration:");
-    console.log(`   Country: ${COUNTRY}`);
-    console.log(`   Shop IDs: ${SHOP_IDS.join(", ")}`);
-    console.log(`   Min Savings: ${MIN_SAVINGS}%`);
-    console.log(`   Max Savings: ${MAX_SAVINGS}%`);
-    console.log(`   Min reviews: ${MIN_REVIEW_COUNT}`);
-    console.log(`   Min rating: ${MIN_RATING}%`);
     console.log(
-      `   Min hours until expiry: ${MIN_HOURS_UNTIL_EXPIRY}`,
+      "ITAD Quality Game Deals Bot - Starting...",
     );
-    console.log(`   Target deals: ${DEAL_LIMIT}`);
+
+    console.log(
+      "=".repeat(60),
+    );
+
+    console.log(
+      `Mode: ${
+        TEST_MODE
+          ? "TEST"
+          : "LIVE"
+      }`,
+    );
+
+    console.log(
+      "\n🔧 Configuration:",
+    );
+
+    console.log(
+      `   Country: ${COUNTRY}`,
+    );
+
+    console.log(
+      `   Shop IDs: ${SHOP_IDS.join(", ")}`,
+    );
+
+    console.log(
+      `   Min savings: ${MIN_SAVINGS}%`,
+    );
+
+    console.log(
+      `   Max savings: ${MAX_SAVINGS}%`,
+    );
+
+    console.log(
+      `   Min Steam reviews: ${MIN_REVIEW_COUNT.toLocaleString()}`,
+    );
+
+    console.log(
+      `   Min Steam rating: ${MIN_RATING}%`,
+    );
+
+    console.log(
+      `   Popularity pool: top ${POPULARITY_POOL}`,
+    );
+
+    console.log(
+      `   Quality candidates: ${QUALITY_CANDIDATES}`,
+    );
+
+    console.log(
+      `   Max deal pages: ${MAX_DEAL_PAGES}`,
+    );
+
+    console.log(
+      `   Final deals: ${DEAL_LIMIT}`,
+    );
+
+    console.log(
+      `   Deduplication: ${DEDUPLICATION_DAYS} days`,
+    );
+
     console.log(
       `   Required DRM: ${
-        REQUIRED_DRM_NAMES.length > 0
-          ? REQUIRED_DRM_NAMES.join(", ")
+        REQUIRED_DRM_NAMES.length >
+        0
+          ? REQUIRED_DRM_NAMES.join(
+              ", ",
+            )
           : "any"
       }`,
     );
 
-    /**
-     * Local filtering
-     */
-    const dealMatcher = createDealMatcher({
-  minSavings: MIN_SAVINGS,
-  maxSavings: MAX_SAVINGS,
-  requiredDrmNames: REQUIRED_DRM_NAMES,
-  minHoursUntilExpiry: MIN_HOURS_UNTIL_EXPIRY,
-});
-
-    console.log(
-      "\n📡 Scanning ITAD pages for matching deals...",
-    );
+    const api =
+      new ITADApi(
+        ITAD_API_KEY,
+      );
 
     /**
-     * Already-posted deals
+     * Step 1:
+     * load ITAD popularity ranking.
      */
+    const popularGames =
+      await api.getMostPopular(
+        POPULARITY_POOL,
+      );
+
+    const popularityMap =
+      new Map<
+        string,
+        number
+      >();
+
+    for (
+      const game of popularGames
+    ) {
+      popularityMap.set(
+        game.id,
+        game.position,
+      );
+    }
+
+    /**
+     * Step 2:
+     * configure deal search.
+     *
+     * IMPORTANT:
+     * reviews are NOT sent to /deals/v2.
+     */
+    const pageSize = 200;
+
+    const baseConfig:
+      ITADConfig = {
+      country: COUNTRY,
+      shops: SHOP_IDS,
+
+      /**
+       * We can leave discount sorting here
+       * because we scan many pages before
+       * ranking candidates ourselves.
+       */
+      sort: "-cut",
+
+      minSavings:
+        MIN_SAVINGS,
+
+      maxSavings:
+        MAX_SAVINGS,
+
+      limit: pageSize,
+    };
+
+    const dealMatcher =
+      createDealMatcher({
+        minSavings:
+          MIN_SAVINGS,
+
+        maxSavings:
+          MAX_SAVINGS,
+
+        requiredDrmNames:
+          REQUIRED_DRM_NAMES,
+
+        minHoursUntilExpiry:
+          MIN_HOURS_UNTIL_EXPIRY,
+      });
+
     const postedIds =
-      deduplicationService.getPostedDealIds();
+      deduplicationService
+        .getPostedDealIds();
 
-    const collector = new DealCollector(
-      DEAL_LIMIT,
-      postedIds,
-      dealMatcher,
-    );
+    /**
+     * All popular discounted candidates.
+     */
+    const candidateMap =
+      new Map<
+        string,
+        ITADDeal
+      >();
 
     let offset = 0;
     let pageNumber = 0;
     let totalScanned = 0;
 
+    let skippedBasicFilter =
+      0;
+
+    let skippedPosted =
+      0;
+
+    let skippedNotPopular =
+      0;
+
+    let skippedDuplicate =
+      0;
+
+    console.log(
+      "\n📡 Scanning Steam deals...",
+    );
+
     /**
-     * Scan ITAD pages until enough matching deals are found
+     * IMPORTANT:
+     *
+     * We DON'T stop after finding 10 or 80 deals.
+     *
+     * This gives games with lower discounts a chance
+     * to appear later in the ITAD result set.
      */
-    while (collector.needsMore) {
-      if (pageNumber > 0) {
-        // Small delay to avoid hammering the API
-        await new Promise((resolve) =>
-          setTimeout(resolve, 200),
-        );
-      }
-
-      const page = await api.fetchDealsPage({
-        ...baseConfig,
-        offset,
-      });
-
-      /**
-       * Temporary debug:
-       * print one raw deal from the first page.
-       *
-       * Useful while configuring filters.
-       * We can remove this later.
-       */
+    while (
+      pageNumber <
+      MAX_DEAL_PAGES
+    ) {
       if (
-        pageNumber === 0 &&
-        page.list.length > 0
+        pageNumber > 0
       ) {
-        const sample = page.list[0];
-
-        console.log(
-          "\n🔎 Sample first deal:",
-          JSON.stringify(
-            {
-              title: sample.title,
-              type: sample.type,
-              cut: sample.deal?.cut,
-              shop: sample.deal?.shop,
-              drm: sample.deal?.drm,
-              expiry: sample.deal?.expiry,
-              reviews: sample.reviews,
-            },
-            null,
-            2,
-          ),
+        await new Promise(
+          (resolve) =>
+            setTimeout(
+              resolve,
+              200,
+            ),
         );
       }
+
+      const page =
+        await api.fetchDealsPage({
+          ...baseConfig,
+          offset,
+        });
 
       pageNumber++;
 
-      /**
-       * No more results
-       */
-      if (page.list.length === 0) {
+      if (
+        page.list.length ===
+        0
+      ) {
         console.log(
-          `Page ${pageNumber}: empty response at offset ${offset}`,
+          `Page ${pageNumber}: no more deals`,
         );
+
         break;
       }
 
-      totalScanned += page.list.length;
+      totalScanned +=
+        page.list.length;
 
-      /**
-       * Give each deal to our collector
-       */
-      for (const deal of page.list) {
-        collector.accept(deal);
+      for (
+        const deal of page.list
+      ) {
+        if (
+          !dealMatcher(deal)
+        ) {
+          skippedBasicFilter++;
 
-        if (!collector.needsMore) {
-          break;
+          continue;
         }
+
+        if (
+          postedIds.has(
+            deal.id,
+          )
+        ) {
+          skippedPosted++;
+
+          continue;
+        }
+
+        if (
+          !popularityMap.has(
+            deal.id,
+          )
+        ) {
+          skippedNotPopular++;
+
+          continue;
+        }
+
+        if (
+          candidateMap.has(
+            deal.id,
+          )
+        ) {
+          skippedDuplicate++;
+
+          continue;
+        }
+
+        candidateMap.set(
+          deal.id,
+          deal,
+        );
       }
 
-      const pageStats = collector.stats;
-
       console.log(
-        `Page ${pageNumber}: scanned ${page.list.length} deals at offset ${offset} ` +
-          `(accepted ${pageStats.accepted}/${DEAL_LIMIT})`,
+        `Page ${pageNumber}: ` +
+          `${page.list.length} scanned | ` +
+          `${candidateMap.size} popular candidates`,
       );
 
-      /**
-       * Safety:
-       * avoid infinite loop if API returns same offset.
-       */
-      if (page.nextOffset === offset) {
+      if (
+        page.nextOffset ===
+        offset
+      ) {
         console.warn(
-          "ITAD returned the same offset. Stopping pagination.",
+          "ITAD returned identical offset. Stopping.",
         );
+
         break;
       }
 
-      offset = page.nextOffset;
+      offset =
+        page.nextOffset;
     }
 
-    /**
-     * Collection results
-     */
-    const newDeals = collector.results;
-    const collectStats = collector.stats;
-
-    console.log("\n✓ Collection complete");
     console.log(
-      `   - ITAD results scanned: ${totalScanned}`,
-    );
-    console.log(
-      `   - Accepted: ${collectStats.accepted}`,
-    );
-    console.log(
-      `   - Skipped (already posted): ${collectStats.skippedPosted}`,
-    );
-    console.log(
-      `   - Skipped (filters): ${collectStats.skippedFilter}`,
-    );
-    console.log(
-      `   - Skipped (duplicate in run): ${collectStats.skippedDuplicate}`,
+      "\n✓ Deal scan complete",
     );
 
-    if (newDeals.length < DEAL_LIMIT) {
-      console.warn(
-        `Found ${newDeals.length}/${DEAL_LIMIT} new deals after scanning ${totalScanned} ITAD results`,
-      );
-    }
+    console.log(
+      `   Scanned: ${totalScanned}`,
+    );
 
-    /**
-     * Nothing found:
-     * do NOT post a useless message to Discord.
-     */
-    if (newDeals.length === 0) {
+    console.log(
+      `   Popular candidates: ${candidateMap.size}`,
+    );
+
+    console.log(
+      `   Basic filter rejected: ${skippedBasicFilter}`,
+    );
+
+    console.log(
+      `   Already posted: ${skippedPosted}`,
+    );
+
+    console.log(
+      `   Outside popularity pool: ${skippedNotPopular}`,
+    );
+
+    console.log(
+      `   Duplicates: ${skippedDuplicate}`,
+    );
+
+    if (
+      candidateMap.size ===
+      0
+    ) {
       console.log(
-        "\nNo new deals found matching criteria",
+        "\nNo popular discounted candidates found.",
       );
 
-      deduplicationService.markDealsAsPosted([]);
+      deduplicationService
+        .markDealsAsPosted(
+          [],
+        );
 
       return;
     }
 
     /**
-     * Stats
+     * Step 3:
+     *
+     * Sort candidates by popularity BEFORE
+     * calling Game Info.
+     *
+     * This prevents making hundreds/thousands
+     * of API requests.
      */
-    console.log("\n📊 Deal Stats:");
-
-    const stats = deduplicationService.getStats();
+    const candidates =
+      Array.from(
+        candidateMap.values(),
+      )
+        .sort(
+          (a, b) =>
+            (popularityMap.get(
+              a.id,
+            ) ?? Infinity) -
+            (popularityMap.get(
+              b.id,
+            ) ?? Infinity),
+        )
+        .slice(
+          0,
+          QUALITY_CANDIDATES,
+        );
 
     console.log(
-      `   - Total tracked deals: ${stats.totalDeals}`,
+      `\n🎯 Inspecting the ${candidates.length} most popular sale candidates...`,
+    );
+
+    /**
+     * Step 4:
+     * retrieve full review/stat data.
+     */
+    const infoMap =
+      await api.getGameInfo(
+        candidates.map(
+          (deal) =>
+            deal.id,
+        ),
+      );
+
+    /**
+     * Step 5:
+     * Steam quality filtering + score.
+     */
+    const ranked:
+      RankedCandidate[] =
+      [];
+
+    let missingInfo = 0;
+    let missingReviews = 0;
+    let lowReviewCount = 0;
+    let lowRating = 0;
+
+    for (
+      const deal of candidates
+    ) {
+      const info =
+        infoMap.get(
+          deal.id,
+        );
+
+      if (!info) {
+        missingInfo++;
+
+        continue;
+      }
+
+      const steamReview =
+        getSteamReview(
+          info,
+        );
+
+      if (
+        !steamReview
+      ) {
+        missingReviews++;
+
+        continue;
+      }
+
+      if (
+        steamReview.count <
+        MIN_REVIEW_COUNT
+      ) {
+        lowReviewCount++;
+
+        continue;
+      }
+
+      if (
+        steamReview.score <
+        MIN_RATING
+      ) {
+        lowRating++;
+
+        continue;
+      }
+
+      const popularityPosition =
+        popularityMap.get(
+          deal.id,
+        );
+
+      if (
+        popularityPosition ===
+        undefined
+      ) {
+        continue;
+      }
+
+      const qualityScore =
+        calculateQualityScore(
+          deal,
+          steamReview,
+          popularityPosition,
+        );
+
+      ranked.push({
+        deal,
+        info,
+        steamReview,
+        popularityPosition,
+        qualityScore,
+      });
+    }
+
+    /**
+     * Best games first.
+     *
+     * Discount is only a tie breaker after quality score.
+     */
+    ranked.sort(
+      (a, b) => {
+        const scoreDifference =
+          b.qualityScore -
+          a.qualityScore;
+
+        if (
+          Math.abs(
+            scoreDifference,
+          ) > 0.001
+        ) {
+          return scoreDifference;
+        }
+
+        return (
+          b.deal.deal.cut -
+          a.deal.deal.cut
+        );
+      },
     );
 
     console.log(
-      `   - New deals to post: ${newDeals.length}`,
+      "\n🧠 Quality filtering:",
+    );
+
+    console.log(
+      `   Detailed info missing: ${missingInfo}`,
+    );
+
+    console.log(
+      `   No Steam reviews: ${missingReviews}`,
+    );
+
+    console.log(
+      `   Fewer than ${MIN_REVIEW_COUNT.toLocaleString()} reviews: ${lowReviewCount}`,
+    );
+
+    console.log(
+      `   Rating below ${MIN_RATING}%: ${lowRating}`,
+    );
+
+    console.log(
+      `   Passed quality filters: ${ranked.length}`,
+    );
+
+    /**
+     * Show ranking in GitHub log.
+     */
+    console.log(
+      "\n🏆 Best candidates:",
+    );
+
+    ranked
+      .slice(0, 15)
+      .forEach(
+        (
+          candidate,
+          index,
+        ) => {
+          console.log(
+            `   ${index + 1}. ` +
+              `${candidate.deal.title} | ` +
+              `Score ${candidate.qualityScore.toFixed(1)} | ` +
+              `${candidate.steamReview.score}% | ` +
+              `${candidate.steamReview.count.toLocaleString()} reviews | ` +
+              `Popular #${candidate.popularityPosition} | ` +
+              `${candidate.deal.deal.cut}% OFF`,
+          );
+        },
+      );
+
+    const selected =
+      ranked.slice(
+        0,
+        DEAL_LIMIT,
+      );
+
+    if (
+      selected.length ===
+      0
+    ) {
+      console.log(
+        "\nNo new quality deals found.",
+      );
+
+      deduplicationService
+        .markDealsAsPosted(
+          [],
+        );
+
+      return;
+    }
+
+    console.log(
+      `\n✅ Selected ${selected.length} quality deals`,
     );
 
     /**
      * Test mode
      */
     if (TEST_MODE) {
-      console.log("\n" + "=".repeat(60));
       console.log(
-        "TEST MODE - Deals that would be posted:",
+        "\n" +
+          "=".repeat(60),
       );
-      console.log("=".repeat(60));
 
-      const combined = newDeals
-        .map(
-          (deal, index) =>
-            `**${index + 1}.** ${deal.title}\n\n${api.formatDealMessage(
-              deal,
-            )}`,
-        )
-        .join("\n---\n");
+      console.log(
+        "TEST MODE - Selected deals:",
+      );
 
-      if (combined.length > 0) {
-        console.log(combined);
-      } else {
-        console.log("No new deals to display");
+      console.log(
+        "=".repeat(60),
+      );
+
+      for (
+        let i = 0;
+        i <
+        selected.length;
+        i++
+      ) {
+        const candidate =
+          selected[i];
+
+        console.log(
+          `\n${i + 1}. ` +
+            api.formatDealMessage(
+              candidate.deal,
+              candidate.info,
+              candidate.popularityPosition,
+            ),
+        );
+
+        console.log(
+          `Quality score: ${candidate.qualityScore.toFixed(1)}`,
+        );
       }
 
-      console.log("=".repeat(60));
-      console.log(
-        "TEST COMPLETE - No deals posted to Discord",
-      );
-      console.log("=".repeat(60));
-
-      /**
-       * Ensure history file exists.
-       */
-      deduplicationService.markDealsAsPosted([]);
+      deduplicationService
+        .markDealsAsPosted(
+          [],
+        );
 
       return;
     }
 
     /**
-     * Discord posting
+     * Discord
      */
-    console.log("\n📨 Posting to Discord...");
+    console.log(
+      "\n📨 Posting to Discord...",
+    );
 
     const fetchedChannel =
-      await client.channels.fetch(CHANNEL_ID);
+      await client.channels.fetch(
+        CHANNEL_ID,
+      );
 
-    if (!fetchedChannel) {
+    if (
+      !fetchedChannel
+    ) {
       throw new Error(
-        `Discord channel ${CHANNEL_ID} was not found`,
+        `Discord channel ${CHANNEL_ID} not found`,
       );
     }
 
-    if (!fetchedChannel.isTextBased()) {
+    if (
+      !fetchedChannel.isTextBased()
+    ) {
       throw new Error(
         `Discord channel ${CHANNEL_ID} is not text based`,
       );
     }
 
-    const channel = fetchedChannel as TextChannel;
+    const channel =
+      fetchedChannel as
+        TextChannel;
 
-    /**
-     * Convert deals to Discord embeds
-     */
-    const embeds = newDeals.map((deal) =>
-      api.formatDealEmbed(deal),
-    );
+    const embeds =
+      selected.map(
+        (candidate) =>
+          api.formatDealEmbed(
+            candidate.deal,
+            candidate.info,
+            candidate.popularityPosition,
+          ),
+      );
 
-    /**
-     * Discord allows max 10 embeds per message
-     */
     const BATCH_SIZE = 10;
 
     for (
@@ -437,40 +981,59 @@ async function postDeals() {
       i < embeds.length;
       i += BATCH_SIZE
     ) {
-      const batch = embeds.slice(
-        i,
-        i + BATCH_SIZE,
-      );
+      const batch =
+        embeds.slice(
+          i,
+          i + BATCH_SIZE,
+        );
 
       await channel.send({
-        embeds: batch as any,
+        embeds:
+          batch as any,
       });
 
       console.log(
-        `Posted embeds ${i + 1}-${Math.min(
-          i + BATCH_SIZE,
-          embeds.length,
-        )}`,
+        `Posted embeds ` +
+          `${i + 1}-` +
+          `${Math.min(
+            i +
+              BATCH_SIZE,
+            embeds.length,
+          )}`,
       );
 
-      /**
-       * Small delay between Discord messages
-       */
-      await new Promise((resolve) =>
-        setTimeout(resolve, 500),
+      await new Promise(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            500,
+          ),
       );
     }
 
     /**
-     * Record deals as posted
+     * Only selected games become "posted".
      */
-    deduplicationService.markDealsAsPosted(
-      newDeals,
+    deduplicationService
+      .markDealsAsPosted(
+        selected.map(
+          (candidate) =>
+            candidate.deal,
+        ),
+      );
+
+    console.log(
+      "\n" +
+        "=".repeat(60),
     );
 
-    console.log("\n" + "=".repeat(60));
-    console.log("✅ All deals posted successfully");
-    console.log("=".repeat(60));
+    console.log(
+      "✅ Quality deals posted successfully",
+    );
+
+    console.log(
+      "=".repeat(60),
+    );
   } catch (error) {
     console.error(
       "\n❌ Error posting deals:",
@@ -481,60 +1044,58 @@ async function postDeals() {
   }
 }
 
-/**
- * Live mode:
- * wait until Discord is ready.
- */
-client.once("clientReady", async () => {
-  if (!TEST_MODE) {
-    console.log(
-      `✅ Logged in as ${client.user?.tag}`,
-    );
-
-    console.log(
-      `📺 Channel ID: ${CHANNEL_ID}`,
-    );
-  }
-
-  try {
-    await postDeals();
-  } catch (error) {
-    console.error("\n❌ Fatal error:", error);
-    process.exit(1);
-  }
-
-  console.log("\n✅ Job completed, exiting...");
-
-  process.exit(0);
-});
-
-/**
- * Test mode does not need Discord login.
- */
-if (TEST_MODE) {
-  console.log(
-    "🧪 TEST_MODE enabled - skipping Discord login\n",
-  );
-
-  postDeals()
-    .then(() => {
+client.once(
+  "clientReady",
+  async () => {
+    if (!TEST_MODE) {
       console.log(
-        "\n✅ Test completed successfully",
+        `✅ Logged in as ${client.user?.tag}`,
       );
 
-      process.exit(0);
-    })
-    .catch((error) => {
+      console.log(
+        `📺 Channel ID: ${CHANNEL_ID}`,
+      );
+    }
+
+    try {
+      await postDeals();
+    } catch (error) {
       console.error(
-        "\n❌ Test failed:",
+        "\n❌ Fatal error:",
         error,
       );
 
       process.exit(1);
-    });
+    }
+
+    console.log(
+      "\n✅ Job completed, exiting...",
+    );
+
+    process.exit(0);
+  },
+);
+
+if (TEST_MODE) {
+  console.log(
+    "🧪 TEST_MODE enabled\n",
+  );
+
+  postDeals()
+    .then(() => {
+      process.exit(0);
+    })
+    .catch(
+      (error) => {
+        console.error(
+          error,
+        );
+
+        process.exit(1);
+      },
+    );
 } else {
-  /**
-   * Live Discord login
-   */
-  client.login(DISCORD_TOKEN);
+  client.login(
+    DISCORD_TOKEN,
+  );
 }
