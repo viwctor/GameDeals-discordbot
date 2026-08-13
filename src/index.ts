@@ -140,18 +140,21 @@ async function postDeals() {
     const pageSize = 200;
 
     const baseConfig: ITADConfig = {
-      country: COUNTRY,
+  country: COUNTRY,
 
-      // Highest discount first
-      sort: "-cut",
+  // Highest discounts first
+  sort: "-cut",
 
-      shops: SHOP_IDS,
+  shops: SHOP_IDS,
 
-      minSavings: MIN_SAVINGS,
-      maxSavings: MAX_SAVINGS,
+  minSavings: MIN_SAVINGS,
+  maxSavings: MAX_SAVINGS,
 
-      limit: pageSize,
-    };
+  minReviewCount: MIN_REVIEW_COUNT,
+  minRating: MIN_RATING,
+
+  limit: pageSize,
+};
 
     /**
      * Print effective configuration
