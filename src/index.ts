@@ -182,16 +182,11 @@ async function postDeals() {
      * Local filtering
      */
     const dealMatcher = createDealMatcher({
-      minSavings: MIN_SAVINGS,
-      maxSavings: MAX_SAVINGS,
-
-      minReviewCount: MIN_REVIEW_COUNT,
-      minRating: MIN_RATING,
-
-      requiredDrmNames: REQUIRED_DRM_NAMES,
-
-      minHoursUntilExpiry: MIN_HOURS_UNTIL_EXPIRY,
-    });
+  minSavings: MIN_SAVINGS,
+  maxSavings: MAX_SAVINGS,
+  requiredDrmNames: REQUIRED_DRM_NAMES,
+  minHoursUntilExpiry: MIN_HOURS_UNTIL_EXPIRY,
+});
 
     console.log(
       "\n📡 Scanning ITAD pages for matching deals...",
