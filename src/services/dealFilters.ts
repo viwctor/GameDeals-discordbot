@@ -112,60 +112,6 @@ export function expiresAfterWindow(
 /**
  * Locate the Steam review information inside the ITAD response.
  */
-export function getSteamReview(
-  deal: ITADDeal,
-): ITADReview | undefined {
-  return deal.reviews?.find(
-    (review) =>
-      review.source.toLowerCase() === "steam",
-  );
-}
-
-/**
- * Filter deals based on Steam review count and rating.
- *
- * Example:
- *   minReviewCount = 5000
- *   minRating = 75
- *
- * means:
- *   at least 5,000 Steam reviews
- *   and at least 75% positive rating.
- */
-export function meetsReviewRequirements(
-  deal: ITADDeal,
-  minReviewCount: number,
-  minRating: number,
-): boolean {
-  /**
-   * If both filters are disabled,
-   * review information is not required.
-   */
-  if (minReviewCount <= 0 && minRating <= 0) {
-    return true;
-  }
-
-  const steamReview = getSteamReview(deal);
-
-  /**
-   * If review filters are enabled but ITAD does not provide
-   * Steam review information, reject the deal.
-   */
-  if (!steamReview) {
-    return false;
-  }
-
-  if (steamReview.count < minReviewCount) {
-    return false;
-  }
-
-  if (steamReview.score < minRating) {
-    return false;
-  }
-
-  return true;
-}
-
 /**
  * Creates the predicate used by DealCollector.
  *
