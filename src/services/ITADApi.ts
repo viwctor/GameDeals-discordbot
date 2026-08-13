@@ -44,15 +44,38 @@ export class ITADApi {
       params.append("shops", config.shops.join(","));
     }
 
-    if (config.minSavings !== undefined || config.maxSavings !== undefined) {
-      const cutFilter = {
-        cut: {
-          min: config.minSavings ?? 0,
-          max: config.maxSavings ?? null,
-        },
-      };
-      params.append("filter", JSON.stringify(cutFilter));
-    }
+    const dealFilter: Record<string, unknown> = {};
+
+if (
+  config.minSavings !== undefined ||
+  config.maxSavings !== undefined
+) {
+  dealFilter.cut = {
+    min: config.minSavings ?? 0,
+    max: config.maxSavings ?? null,
+  };
+}
+
+if (config.minRating !== undefined) {
+  dealFilter.steamPerc = {
+    min: config.minRating,
+    max: null,
+  };
+}
+
+if (config.minReviewCount !== undefined) {
+  dealFilter.steamCount = {
+    min: config.minReviewCount,
+    max: null,
+  };
+}
+
+if (Object.keys(dealFilter).length > 0) {
+  params.append(
+    "filter",
+    JSON.stringify(dealFilter),
+  );
+}
 
     const url = `${this.baseUrl}/deals/v2?key=${this.apiKey}&${params.toString()}`;
 
