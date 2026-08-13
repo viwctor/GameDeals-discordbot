@@ -519,11 +519,37 @@ async function postDeals() {
         );
       }
 
-      const page =
-        await api.fetchDealsPage({
-          ...baseConfig,
-          offset,
-        });
+      let page;
+
+try {
+  page = await api.fetchDealsPage({
+    ...baseConfig,
+    offset,
+  });
+} catch (error) {
+  console.warn(
+    `⚠️ Failed to fetch deal page ${pageNumber + 1}:`,
+    error,
+  );
+
+  /**
+   * If we already collected enough candidates,
+   * continue with what we have instead of killing the job.
+   */
+  if (candidateMap.size >= QUALITY_CANDIDATES) {
+    console.warn(
+      `⚠️ ITAD became unavailable, but we already have ${candidateMap.size} candidates. Continuing with quality ranking.`,
+    );
+
+    break;
+  }
+
+  /**
+   * If we don't even have enough candidates yet,
+   * propagate the error.
+   */
+  throw error;
+}
 
       pageNumber++;
 
@@ -593,7 +619,24 @@ async function postDeals() {
           `${page.list.length} scanned | ` +
           `${candidateMap.size} popular candidates`,
       );
+/**
+ * We only inspect QUALITY_CANDIDATES games later.
+ *
+ * Keep a small reserve of 20 candidates, then stop
+ * hammering the deals endpoint unnecessarily.
+ */
+const candidateTarget =
+  QUALITY_CANDIDATES + 20;
 
+if (
+  candidateMap.size >= candidateTarget
+) {
+  console.log(
+    `🎯 Candidate target reached: ${candidateMap.size}/${candidateTarget}. Stopping deal scan.`,
+  );
+
+  break;
+}
       if (
         page.nextOffset ===
         offset
