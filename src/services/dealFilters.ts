@@ -3,6 +3,8 @@ import { ITADDeal } from "../types";
 export interface DealFilterCriteria {
   minSavings: number;
   maxSavings: number;
+  minReviewCount?: number;
+  minRating?: number;
   allowedTypes?: ReadonlySet<string | null>;
   requiredDrmNames?: readonly string[];
   minHoursUntilExpiry?: number;
@@ -64,11 +66,38 @@ export function expiresAfterWindow(
   return expiryTime - Date.now() > minExpiryMs;
 }
 
+export function getSteamReview(deal: ITADDeal) {
+  return deal.reviews?.find(
+    (review) => review.source.toLowerCase() === "steam",
+  );
+}
+
+export function meetsReviewRequirements(
+  deal: ITADDeal,
+  minReviewCount: number,
+  minRating: number,
+): boolean {
+  const steamReview = getSteamReview(deal);
+
+  if (!steamReview) {
+    return false;
+  }
+
+  return (
+    steamReview.count >= minReviewCount &&
+    steamReview.score >= minRating
+  );
+}
+
 export function createDealMatcher(criteria: DealFilterCriteria): DealPredicate {
   const allowedTypes = criteria.allowedTypes ?? DEFAULT_ALLOWED_TYPES;
   const requiredDrmNames = criteria.requiredDrmNames ?? [];
+
   const minHoursUntilExpiry =
     criteria.minHoursUntilExpiry ?? DEFAULT_MIN_HOURS_UNTIL_EXPIRY;
+
+  const minReviewCount = criteria.minReviewCount ?? 0;
+  const minRating = criteria.minRating ?? 0;
 
   return (deal: ITADDeal): boolean => {
     if (!hasDealInfo(deal)) {
@@ -80,6 +109,10 @@ export function createDealMatcher(criteria: DealFilterCriteria): DealPredicate {
     }
 
     if (!savingsInRange(deal, criteria.minSavings, criteria.maxSavings)) {
+      return false;
+    }
+
+    if (!meetsReviewRequirements(deal, minReviewCount, minRating)) {
       return false;
     }
 
