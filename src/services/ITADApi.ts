@@ -56,20 +56,31 @@ if (
   };
 }
 
-if (config.minRating !== undefined) {
+if (
+  config.minRating !== undefined &&
+  config.minRating > 0
+) {
   dealFilter.steamPerc = {
     min: config.minRating,
     max: null,
   };
 }
 
-if (config.minReviewCount !== undefined) {
+if (
+  config.minReviewCount !== undefined &&
+  config.minReviewCount > 0
+) {
   dealFilter.steamCount = {
     min: config.minReviewCount,
     max: null,
   };
 }
 
+console.log(
+  "🔎 ITAD API filter:",
+  JSON.stringify(dealFilter),
+);
+    
 if (Object.keys(dealFilter).length > 0) {
   params.append(
     "filter",
