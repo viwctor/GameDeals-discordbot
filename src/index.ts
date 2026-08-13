@@ -39,7 +39,7 @@ const SHOP_IDS = process.env.SHOP_IDS
   : [61, 35, 6, 3];
 
 const REQUIRED_DRM_NAMES = parseDrmNamesFromEnv(
-  process.env.REQUIRED_DRM_NAMES ?? "Steam",
+  process.env.REQUIRED_DRM_NAMES,
 );
 
 const client = new Client({
