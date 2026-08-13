@@ -1,10 +1,8 @@
-import { ITADDeal, ITADReview } from "../types";
+import { ITADDeal } from "../types";
 
 export interface DealFilterCriteria {
   minSavings: number;
   maxSavings: number;
-  minReviewCount?: number;
-  minRating?: number;
   allowedTypes?: ReadonlySet<string | null>;
   requiredDrmNames?: readonly string[];
   minHoursUntilExpiry?: number;
@@ -12,29 +10,17 @@ export interface DealFilterCriteria {
 
 export type DealPredicate = (deal: ITADDeal) => boolean;
 
-/**
- * By default, only actual games are accepted.
- * This helps exclude DLCs, bundles, soundtracks, etc.
- */
-const DEFAULT_ALLOWED_TYPES: ReadonlySet<string | null> = new Set([
-  "game",
-]);
+const DEFAULT_ALLOWED_TYPES: ReadonlySet<string | null> =
+  new Set(["game"]);
 
-/**
- * Do not reject deals based on expiry by default.
- */
 const DEFAULT_MIN_HOURS_UNTIL_EXPIRY = 0;
 
-/**
- * Check whether the ITAD item actually contains deal information.
- */
-export function hasDealInfo(deal: ITADDeal): boolean {
+export function hasDealInfo(
+  deal: ITADDeal,
+): boolean {
   return Boolean(deal.deal);
 }
 
-/**
- * Accept only allowed item types.
- */
 export function isAllowedType(
   deal: ITADDeal,
   allowedTypes: ReadonlySet<string | null>,
@@ -42,9 +28,6 @@ export function isAllowedType(
   return allowedTypes.has(deal.type);
 }
 
-/**
- * Check whether the discount percentage is inside the desired range.
- */
 export function savingsInRange(
   deal: ITADDeal,
   minSavings: number,
@@ -52,17 +35,12 @@ export function savingsInRange(
 ): boolean {
   const cut = deal.deal?.cut ?? 0;
 
-  return cut >= minSavings && cut <= maxSavings;
+  return (
+    cut >= minSavings &&
+    cut <= maxSavings
+  );
 }
 
-/**
- * Optional DRM filter.
- *
- * An empty array means "accept any DRM".
- *
- * Since SHOP_IDS=61 already restricts results to Steam,
- * we intentionally leave this filter disabled in our setup.
- */
 export function hasAnyDrmName(
   deal: ITADDeal,
   drmNames: readonly string[],
@@ -75,18 +53,13 @@ export function hasAnyDrmName(
     deal.deal?.drm?.some((drmInfo) =>
       drmNames.some(
         (name) =>
-          name.toLowerCase() === drmInfo.name.toLowerCase(),
+          name.toLowerCase() ===
+          drmInfo.name.toLowerCase(),
       ),
     ) ?? false
   );
 }
 
-/**
- * Reject deals that expire too soon.
- *
- * With minHoursUntilExpiry = 0, every currently-valid deal
- * is accepted regardless of how soon it expires.
- */
 export function expiresAfterWindow(
   deal: ITADDeal,
   minHoursUntilExpiry: number,
@@ -104,30 +77,23 @@ export function expiresAfterWindow(
   }
 
   const minExpiryMs =
-    minHoursUntilExpiry * 60 * 60 * 1000;
+    minHoursUntilExpiry *
+    60 *
+    60 *
+    1000;
 
-  return expiryTime - Date.now() > minExpiryMs;
+  return (
+    expiryTime - Date.now() >
+    minExpiryMs
+  );
 }
 
-/**
- * Locate the Steam review information inside the ITAD response.
- */
-/**
- * Creates the predicate used by DealCollector.
- *
- * Filter order:
- * 1. Deal information exists
- * 2. Item is an allowed type
- * 3. Discount is inside the configured range
- * 4. Steam reviews satisfy popularity/quality requirements
- * 5. DRM requirement (normally disabled for our setup)
- * 6. Expiration requirement
- */
 export function createDealMatcher(
   criteria: DealFilterCriteria,
 ): DealPredicate {
   const allowedTypes =
-    criteria.allowedTypes ?? DEFAULT_ALLOWED_TYPES;
+    criteria.allowedTypes ??
+    DEFAULT_ALLOWED_TYPES;
 
   const requiredDrmNames =
     criteria.requiredDrmNames ?? [];
@@ -141,7 +107,12 @@ export function createDealMatcher(
       return false;
     }
 
-    if (!isAllowedType(deal, allowedTypes)) {
+    if (
+      !isAllowedType(
+        deal,
+        allowedTypes,
+      )
+    ) {
       return false;
     }
 
@@ -177,15 +148,6 @@ export function createDealMatcher(
   };
 }
 
-/**
- * Parse comma-separated DRM names from an environment variable.
- *
- * Examples:
- *   "Steam"
- *   "Steam,GOG"
- *
- * Empty / undefined = no DRM restriction.
- */
 export function parseDrmNamesFromEnv(
   rawValue: string | undefined,
 ): string[] {
@@ -199,5 +161,8 @@ export function parseDrmNamesFromEnv(
   return rawValue
     .split(",")
     .map((name) => name.trim())
-    .filter((name) => name.length > 0);
+    .filter(
+      (name) =>
+        name.length > 0,
+    );
 }
