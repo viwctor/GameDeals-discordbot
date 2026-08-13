@@ -69,12 +69,8 @@ export interface ITADConfig {
   limit?: number;
   sort?: string;
   shops?: number[];
-
   minSavings?: number;
   maxSavings?: number;
-
-  minReviewCount?: number;
-  minRating?: number;
 }
 
 export interface ITADDealsResponse {
@@ -82,19 +78,56 @@ export interface ITADDealsResponse {
   nextOffset: number;
 }
 
+export interface ITADGameStats {
+  rank?: number;
+  waitlisted?: number;
+  collected?: number;
+}
+
+export interface ITADPlayers {
+  recent?: number;
+  day?: number;
+  week?: number;
+  peak?: number;
+}
+
 export interface ITADGameInfo {
   id: string;
   slug: string;
   title: string;
-  type: string;
+  type: string | null;
   mature: boolean;
-  earlyAccess: boolean;
-  achievements: boolean;
-  tradingCards: boolean;
+
+  earlyAccess?: boolean;
+  achievements?: boolean;
+  tradingCards?: boolean;
+
   appid?: number;
+
+  assets?: ITADAssets;
+
   tags?: string[];
   releaseDate?: string;
+
   reviews?: ITADReview[];
+
+  stats?: ITADGameStats;
+
+  players?: ITADPlayers;
+
+  urls?: {
+    game?: string;
+  };
+}
+
+export interface ITADPopularGame {
+  position: number;
+  id: string;
+  slug: string;
+  title: string;
+  type: string | null;
+  mature: boolean;
+  count: number;
 }
 
 export interface DealHistory {
