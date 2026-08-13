@@ -190,12 +190,6 @@ export function createDealMatcher(
     criteria.minHoursUntilExpiry ??
     DEFAULT_MIN_HOURS_UNTIL_EXPIRY;
 
-  const minReviewCount =
-    criteria.minReviewCount ?? 0;
-
-  const minRating =
-    criteria.minRating ?? 0;
-
   return (deal: ITADDeal): boolean => {
     if (!hasDealInfo(deal)) {
       return false;
@@ -210,16 +204,6 @@ export function createDealMatcher(
         deal,
         criteria.minSavings,
         criteria.maxSavings,
-      )
-    ) {
-      return false;
-    }
-
-    if (
-      !meetsReviewRequirements(
-        deal,
-        minReviewCount,
-        minRating,
       )
     ) {
       return false;
