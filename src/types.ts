@@ -69,8 +69,12 @@ export interface ITADConfig {
   limit?: number;
   sort?: string;
   shops?: number[];
+
   minSavings?: number;
   maxSavings?: number;
+
+  minReviewCount?: number;
+  minRating?: number;
 }
 
 export interface ITADDealsResponse {
