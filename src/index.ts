@@ -106,6 +106,23 @@ async function postDeals() {
       }
 
       const page = await api.fetchDealsPage({ ...baseConfig, offset });
+        if (pageNumber === 0 && page.list.length > 0) {
+  console.log(
+    "Sample first deal:",
+    JSON.stringify(
+      {
+        title: page.list[0].title,
+        type: page.list[0].type,
+        cut: page.list[0].deal?.cut,
+        shop: page.list[0].deal?.shop,
+        drm: page.list[0].deal?.drm,
+        expiry: page.list[0].deal?.expiry,
+      },
+      null,
+      2,
+    ),
+  );
+}
       pageNumber++;
 
       if (page.list.length === 0) {
