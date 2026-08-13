@@ -18,6 +18,200 @@ export class ITADApi {
     this.apiKey = apiKey;
   }
 
+  /**
+   * Small sleep helper.
+   */
+  private async sleep(
+    milliseconds: number,
+  ): Promise<void> {
+    await new Promise((resolve) =>
+      setTimeout(resolve, milliseconds),
+    );
+  }
+
+  /**
+   * Calculate how long we should wait before retrying.
+   *
+   * If ITAD sends Retry-After, respect it.
+   * Otherwise use exponential backoff:
+   *
+   * 1.5s -> 3s -> 6s
+   */
+  private getRetryDelay(
+    response: Response,
+    attempt: number,
+  ): number {
+    const retryAfter =
+      response.headers.get("retry-after");
+
+    if (retryAfter) {
+      /**
+       * Retry-After may be a number of seconds.
+       */
+      const seconds =
+        Number(retryAfter);
+
+      if (
+        Number.isFinite(seconds) &&
+        seconds >= 0
+      ) {
+        return seconds * 1000;
+      }
+
+      /**
+       * Or an HTTP date.
+       */
+      const retryDate =
+        Date.parse(retryAfter);
+
+      if (
+        !Number.isNaN(retryDate)
+      ) {
+        return Math.max(
+          retryDate - Date.now(),
+          1000,
+        );
+      }
+    }
+
+    return (
+      1500 *
+      Math.pow(
+        2,
+        attempt - 1,
+      )
+    );
+  }
+
+  /**
+   * Fetch wrapper with automatic retry.
+   *
+   * Retries temporary failures:
+   * - 429 Too Many Requests
+   * - 500 Internal Server Error
+   * - 502 Bad Gateway
+   * - 503 Service Unavailable
+   * - 504 Gateway Timeout
+   *
+   * Also retries network errors.
+   */
+  private async fetchWithRetry(
+    url: string,
+    maxAttempts = 4,
+  ): Promise<Response> {
+    const retryableStatuses =
+      new Set([
+        429,
+        500,
+        502,
+        503,
+        504,
+      ]);
+
+    let lastError:
+      unknown = undefined;
+
+    for (
+      let attempt = 1;
+      attempt <= maxAttempts;
+      attempt++
+    ) {
+      try {
+        const response =
+          await fetch(url);
+
+        /**
+         * Successful request.
+         */
+        if (response.ok) {
+          return response;
+        }
+
+        /**
+         * Permanent/non-retryable HTTP error.
+         *
+         * Let the caller deal with it immediately.
+         */
+        if (
+          !retryableStatuses.has(
+            response.status,
+          )
+        ) {
+          return response;
+        }
+
+        /**
+         * Last attempt:
+         * return the response so the caller can
+         * produce the proper error message.
+         */
+        if (
+          attempt ===
+          maxAttempts
+        ) {
+          console.error(
+            `❌ ITAD returned ${response.status} after ${maxAttempts} attempts.`,
+          );
+
+          return response;
+        }
+
+        const waitMs =
+          this.getRetryDelay(
+            response,
+            attempt,
+          );
+
+        console.warn(
+          `⚠️ ITAD returned ${response.status}. ` +
+            `Attempt ${attempt}/${maxAttempts}. ` +
+            `Retrying in ${(waitMs / 1000).toFixed(1)}s...`,
+        );
+
+        await this.sleep(
+          waitMs,
+        );
+      } catch (error) {
+        lastError = error;
+
+        if (
+          attempt ===
+          maxAttempts
+        ) {
+          console.error(
+            `❌ ITAD network request failed after ${maxAttempts} attempts.`,
+          );
+
+          throw error;
+        }
+
+        const waitMs =
+          1500 *
+          Math.pow(
+            2,
+            attempt - 1,
+          );
+
+        console.warn(
+          `⚠️ ITAD network request failed. ` +
+            `Attempt ${attempt}/${maxAttempts}. ` +
+            `Retrying in ${(waitMs / 1000).toFixed(1)}s...`,
+        );
+
+        await this.sleep(
+          waitMs,
+        );
+      }
+    }
+
+    throw (
+      lastError ??
+      new Error(
+        "ITAD request failed",
+      )
+    );
+  }
+
   async fetchDealsPage(
     config: ITADConfig,
   ): Promise<ITADDealsResponse> {
@@ -68,14 +262,9 @@ export class ITADApi {
     }
 
     /**
-     * IMPORTANT:
-     *
      * Only discount is filtered by /deals/v2.
      *
-     * Steam review filters are intentionally NOT
-     * sent here anymore.
-     *
-     * Review quality will be checked afterwards
+     * Steam review quality is checked later
      * using /games/info/v2.
      */
     const dealFilter:
@@ -90,6 +279,7 @@ export class ITADApi {
       dealFilter.cut = {
         min:
           config.minSavings ?? 0,
+
         max:
           config.maxSavings ??
           null,
@@ -97,12 +287,15 @@ export class ITADApi {
     }
 
     if (
-      Object.keys(dealFilter)
-        .length > 0
+      Object.keys(
+        dealFilter,
+      ).length > 0
     ) {
       params.append(
         "filter",
-        JSON.stringify(dealFilter),
+        JSON.stringify(
+          dealFilter,
+        ),
       );
     }
 
@@ -113,7 +306,9 @@ export class ITADApi {
 
     try {
       const response =
-        await fetch(url);
+        await this.fetchWithRetry(
+          url,
+        );
 
       if (!response.ok) {
         let errorMessage =
@@ -138,7 +333,9 @@ export class ITADApi {
               `${errorBody.reason_phrase}`;
           }
         } catch {
-          // Ignore invalid error body
+          /**
+           * Ignore invalid error body.
+           */
         }
 
         throw new Error(
@@ -156,6 +353,7 @@ export class ITADApi {
 
       return {
         list,
+
         nextOffset:
           requestOffset +
           list.length,
@@ -178,7 +376,9 @@ export class ITADApi {
    */
   async getMostPopular(
     requestedLimit: number,
-  ): Promise<ITADPopularGame[]> {
+  ): Promise<
+    ITADPopularGame[]
+  > {
     const result:
       ITADPopularGame[] = [];
 
@@ -210,7 +410,9 @@ export class ITADApi {
         `&limit=${batchLimit}`;
 
       const response =
-        await fetch(url);
+        await this.fetchWithRetry(
+          url,
+        );
 
       if (!response.ok) {
         throw new Error(
@@ -222,7 +424,9 @@ export class ITADApi {
         (await response.json()) as
           ITADPopularGame[];
 
-      result.push(...batch);
+      result.push(
+        ...batch,
+      );
 
       if (
         batch.length <
@@ -234,12 +438,11 @@ export class ITADApi {
       offset +=
         batch.length;
 
-      await new Promise(
-        (resolve) =>
-          setTimeout(
-            resolve,
-            150,
-          ),
+      /**
+       * Small delay between popularity pages.
+       */
+      await this.sleep(
+        250,
       );
     }
 
@@ -253,13 +456,16 @@ export class ITADApi {
   /**
    * Load detailed information for selected games.
    *
-   * This is where Steam reviews, stats and
-   * player information come from.
+   * Steam reviews, popularity stats and
+   * player data are obtained here.
    */
   async getGameInfo(
     gameIds: string[],
   ): Promise<
-    Map<string, ITADGameInfo>
+    Map<
+      string,
+      ITADGameInfo
+    >
   > {
     const result =
       new Map<
@@ -284,9 +490,13 @@ export class ITADApi {
           `&id=${gameId}`;
 
         const response =
-          await fetch(url);
+          await this.fetchWithRetry(
+            url,
+          );
 
-        if (response.ok) {
+        if (
+          response.ok
+        ) {
           const info =
             (await response.json()) as
               ITADGameInfo;
@@ -297,12 +507,16 @@ export class ITADApi {
           );
         } else {
           console.warn(
-            `Game info failed for ${gameId}: ${response.status}`,
+            `⚠️ Game info failed for ${gameId}: ${response.status}`,
           );
         }
       } catch (error) {
+        /**
+         * Do NOT kill the entire job just because
+         * one game's info failed.
+         */
         console.error(
-          `Error fetching info for game ${gameId}:`,
+          `⚠️ Error fetching info for game ${gameId}:`,
           error,
         );
       }
@@ -319,14 +533,10 @@ export class ITADApi {
       }
 
       /**
-       * Be polite to ITAD API.
+       * Avoid hitting ITAD too aggressively.
        */
-      await new Promise(
-        (resolve) =>
-          setTimeout(
-            resolve,
-            100,
-          ),
+      await this.sleep(
+        150,
       );
     }
 
@@ -395,7 +605,7 @@ export class ITADApi {
 
     if (
       recentPlayers !==
-      undefined &&
+        undefined &&
       recentPlayers > 0
     ) {
       message +=
@@ -407,7 +617,8 @@ export class ITADApi {
       `Store: ${deal.deal.shop.name}\n`;
 
     if (
-      deal.deal.flag === "H"
+      deal.deal.flag ===
+      "H"
     ) {
       message +=
         `HISTORICAL LOW!\n`;
@@ -438,7 +649,9 @@ export class ITADApi {
 
     const embed =
       new EmbedBuilder()
-        .setTitle(deal.title)
+        .setTitle(
+          deal.title,
+        )
         .setURL(
           deal.deal.url,
         )
@@ -451,29 +664,39 @@ export class ITADApi {
         .addFields(
           {
             name: "Price",
+
             value:
               `${price.currency} ` +
               `${price.amount.toFixed(2)} ` +
               `(was ${regular.amount.toFixed(2)})`,
+
             inline: true,
           },
+
           {
             name:
               "Discount",
+
             value:
               `${cut}% OFF`,
+
             inline: true,
           },
+
           {
-            name: "Store",
+            name:
+              "Store",
+
             value:
               shop.name,
+
             inline: true,
           },
         );
 
     if (
-      deal.deal.flag === "H"
+      deal.deal.flag ===
+      "H"
     ) {
       embed.setDescription(
         "🔥 **HISTORICAL LOW**",
@@ -496,9 +719,11 @@ export class ITADApi {
       embed.addFields({
         name:
           "Steam Rating",
+
         value:
           `⭐ ${steamReview.score}% ` +
           `(${steamReview.count.toLocaleString()} reviews)`,
+
         inline: true,
       });
     }
@@ -510,8 +735,10 @@ export class ITADApi {
       embed.addFields({
         name:
           "Popularity",
+
         value:
           `#${popularityPosition} on ITAD`,
+
         inline: true,
       });
     }
@@ -527,8 +754,10 @@ export class ITADApi {
       embed.addFields({
         name:
           "Players",
+
         value:
           `${recentPlayers.toLocaleString()} recent`,
+
         inline: true,
       });
     }
@@ -536,7 +765,9 @@ export class ITADApi {
     const assets =
       deal.assets || {};
 
-    if (assets.boxart) {
+    if (
+      assets.boxart
+    ) {
       embed.setThumbnail(
         assets.boxart,
       );
