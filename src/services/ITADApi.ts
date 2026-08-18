@@ -644,8 +644,21 @@ export class ITADApi {
     const cut =
       deal.deal.cut;
 
-    const shop =
-      deal.deal.shop;
+    const formatPrice =
+      (amount: number) =>
+        `R$ ${amount.toLocaleString(
+          "pt-BR",
+          {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          },
+        )}`;
+
+    const formatNumber =
+      (value: number) =>
+        value.toLocaleString(
+          "pt-BR",
+        );
 
     const embed =
       new EmbedBuilder()
@@ -663,32 +676,21 @@ export class ITADApi {
         )
         .addFields(
           {
-            name: "Price",
+            name: "Preço",
 
             value:
-              `${price.currency} ` +
-              `${price.amount.toFixed(2)} ` +
-              `(was ${regular.amount.toFixed(2)})`,
+              `~~${formatPrice(regular.amount)}~~ ` +
+              `${formatPrice(price.amount)}`,
 
             inline: true,
           },
 
           {
             name:
-              "Discount",
+              "Desconto",
 
             value:
-              `${cut}% OFF`,
-
-            inline: true,
-          },
-
-          {
-            name:
-              "Store",
-
-            value:
-              shop.name,
+              `${cut}%`,
 
             inline: true,
           },
@@ -718,11 +720,11 @@ export class ITADApi {
     if (steamReview) {
       embed.addFields({
         name:
-          "Steam Rating",
+          "Avaliações",
 
         value:
           `⭐ ${steamReview.score}% ` +
-          `(${steamReview.count.toLocaleString()} reviews)`,
+          `(${formatNumber(steamReview.count)})`,
 
         inline: true,
       });
@@ -734,10 +736,10 @@ export class ITADApi {
     ) {
       embed.addFields({
         name:
-          "Popularity",
+          "Popularidade",
 
         value:
-          `#${popularityPosition} on ITAD`,
+          `#${popularityPosition}`,
 
         inline: true,
       });
@@ -753,10 +755,12 @@ export class ITADApi {
     ) {
       embed.addFields({
         name:
-          "Players",
+          "Jogadores",
 
         value:
-          `${recentPlayers.toLocaleString()} recent`,
+          formatNumber(
+            recentPlayers,
+          ),
 
         inline: true,
       });
